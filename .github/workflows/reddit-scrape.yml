@@ -1,0 +1,99 @@
+name: Reddit Scrape Checked
+
+on:
+  issues:
+    types: [edited]
+
+permissions:
+  issues: write
+  contents: write
+
+# Share the process-link concurrency group so reddit scrapes and normal link
+# submissions never race on `git push` to main.
+concurrency:
+  group: process-link
+  cancel-in-progress: false
+
+jobs:
+  scrape:
+    runs-on: ubuntu-latest
+    # Only digest issues, and only when the body actually changed (a checkbox
+    # toggle). Title/label edits carry no changes.body and are skipped.
+    if: >
+      contains(github.event.issue.labels.*.name, 'reddit-digest') &&
+      github.event.changes.body != null
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: pip install -r scripts/requirements.txt
+
+      - name: Determine newly-checked threads
+        id: diff
+        env:
+          OLD_BODY: ${{ github.event.changes.body.from }}
+          NEW_BODY: ${{ github.event.issue.body }}
+        run: |
+          python scripts/reddit_scrape.py urls > /tmp/new_urls.txt
+          count=$(grep -c . /tmp/new_urls.txt || true)
+          echo "count=$count" >> "$GITHUB_OUTPUT"
+          echo "Newly checked: $count thread(s)."
+
+      - name: Scrape checked threads
+        if: steps.diff.outputs.count != '0'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          REDDIT_CLIENT_ID: ${{ secrets.REDDIT_CLIENT_ID }}
+          REDDIT_CLIENT_SECRET: ${{ secrets.REDDIT_CLIENT_SECRET }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+        run: |
+          while IFS= read -r u; do
+            [ -z "$u" ] && continue
+            echo "Scraping: $u"
+            python scripts/fetch.py --url "$u" --source-issue "$ISSUE_NUMBER"
+          done < /tmp/new_urls.txt
+
+      - name: Auto-tag content
+        if: steps.diff.outputs.count != '0'
+        run: python scripts/tag.py
+
+      - name: Build indexes
+        if: steps.diff.outputs.count != '0'
+        run: python scripts/index.py
+
+      - name: Commit scraped content
+        if: steps.diff.outputs.count != '0'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add links/ tags/ archive/ data/
+          if git diff --cached --quiet; then
+            echo "No changes to commit."
+            exit 0
+          fi
+          git commit -m "process: reddit threads from digest #${{ github.event.issue.number }}"
+          for attempt in 1 2 3 4 5; do
+            if git push; then
+              echo "Pushed on attempt $attempt."
+              break
+            fi
+            echo "Push rejected (attempt $attempt); rebasing on origin/main and retrying."
+            git pull --rebase origin main
+          done
+
+      - name: Mark scraped threads in the digest
+        if: steps.diff.outputs.count != '0'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: python scripts/reddit_scrape.py mark "${{ github.event.issue.number }}" < /tmp/new_urls.txt

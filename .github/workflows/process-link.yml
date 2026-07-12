@@ -1,0 +1,92 @@
+name: Process Link Issue
+
+on:
+  issues:
+    types: [opened]
+  workflow_dispatch:
+    inputs:
+      issue_number:
+        description: "Issue number to reprocess (optional)"
+        required: false
+        type: number
+
+permissions:
+  issues: read
+  contents: write
+
+# Serialize processing so concurrent submissions don't race on `git push`.
+# Each run processes a different issue and must complete, so we queue rather
+# than cancel in-progress runs.
+concurrency:
+  group: process-link
+  cancel-in-progress: false
+
+jobs:
+  process-link:
+    runs-on: ubuntu-latest
+    if: "contains(github.event.issue.labels.*.name, 'link-submission') || github.event_name == 'workflow_dispatch'"
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: |
+          pip install -r scripts/requirements.txt
+
+      - name: Extract issue number
+        id: issue
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "number=${{ github.event.inputs.issue_number }}" >> $GITHUB_OUTPUT
+          else
+            echo "number=${{ github.event.issue.number }}" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Fetch and process link
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          ISSUE_NUMBER: ${{ steps.issue.outputs.number }}
+        run: |
+          python scripts/fetch.py $ISSUE_NUMBER
+
+      - name: Auto-tag content
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          python scripts/tag.py
+
+      - name: Build indexes
+        run: |
+          python scripts/index.py
+
+      - name: Commit processed content
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add links/ tags/ archive/ data/
+          if git diff --cached --quiet; then
+            echo "No changes to commit."
+            exit 0
+          fi
+          git commit -m "process: link from issue #${{ steps.issue.outputs.number }}"
+          # The concurrency guard serializes runs, but rebase-and-retry on push
+          # keeps this resilient to any out-of-band pushes to main.
+          for attempt in 1 2 3 4 5; do
+            if git push; then
+              echo "Pushed on attempt $attempt."
+              exit 0
+            fi
+            echo "Push rejected (attempt $attempt); rebasing on origin/main and retrying."
+            git pull --rebase origin main
+          done
+          echo "::error::Failed to push after 5 attempts."
+          exit 1

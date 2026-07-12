@@ -1,0 +1,19 @@
+{
+  "_comment": "Discovery config for reddit_discover.py. Edit this file to tune what surfaces in the weekly digest issue. ranking: top|hot|new. time_filter applies to 'top' only.",
+  "subreddits": [
+    "LocalLLaMA",
+    "MachineLearning",
+    "ClaudeAI",
+    "Anthropic",
+    "OpenAI",
+    "StableDiffusion",
+    "singularity"
+  ],
+  "ranking": "top",
+  "time_filter": "week",
+  "limit_per_sub": 15,
+  "min_score": 100,
+  "min_comments": 25,
+  "max_candidates": 40,
+  "summary_chars": 240
+}
