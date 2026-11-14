@@ -1,5 +1,11 @@
 # research-pipeline
 
+> **Archived 2026-11.** This mirror existed because the Reddit Data API application
+> required a source-code link. The application was rejected, and Reddit stopped
+> accepting new public Data API requests on 2026-10-31, so the PRAW-based Reddit
+> access described below never went into service and the mirror is no longer
+> maintained. The text below describes the code as it stood at archival.
+
 Source code for a **personal, single-user research-link collection pipeline**. Links —
 from the web generally, and from Reddit specifically — are fetched, categorized, and
 indexed into a private searchable corpus for one person's own reference.
